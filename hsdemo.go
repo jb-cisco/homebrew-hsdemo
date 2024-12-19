@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,13 @@ import (
 	"github.com/pterm/pterm"
 	"github.com/pterm/pterm/putils"
 )
+
+type LoadBalancerStatus struct {
+	Ingress []struct {
+		IP       string `json:"ip"`
+		Hostname string `json:"hostname"`
+	} `json:"ingress"`
+}
 
 func main() {
 	pterm.DefaultBigText.WithLetters(putils.LettersFromString("hsdemo")).Srender()
@@ -138,7 +146,10 @@ func main() {
 		if !result {
 			return
 		}
-		execute("creating cluster", nil, "eksdemo", "create", "cluster", "hsdemo-cluster")
+		errored := execute("creating cluster", nil, "eksdemo", "create", "cluster", "hsdemo-cluster")
+		if errored != nil {
+			fmt.Println("Aborting the remaining steps because the cluster creation failed! :( ")
+		}
 	}
 
 	execute("installing cilium", nil, "eksdemo", "install", "cilium", "--cluster", "hsdemo-cluster")
@@ -168,28 +179,96 @@ func main() {
 	execute("deploy splunk instance", &yamlContent, "kubectl", "apply", "--namespace", "splunk-operator", "-f", "-")
 
 	// Command to get the current AWS user
-	cmd = exec.Command("kubectl", "get", "secrets", "-n", "splunk-operator", "splunk-s1-standalone-secret-v1", "--template={{index .data \"default.yml\"}}")
+	cmd = exec.Command("kubectl", "get", "secrets", "-n", "splunk-operator", "splunk-s1-standalone-secret-v1", "--output", "json")
 
 	// Run the command and capture the output
 	output, err = cmd.Output()
 	if err != nil {
 		fmt.Printf("Error executing command: %s\n", err)
-		return
 	}
 	// Decode the base64 output
 	decodedOutput, err := base64.StdEncoding.DecodeString(string(output))
 	if err != nil {
 		fmt.Printf("Error decoding base64: %s\n", err)
-		return
+	} else {
+		// Print the decoded output
+		fmt.Println(string(decodedOutput))
 	}
-	// Print the decoded output
-	fmt.Println(string(decodedOutput))
 
-	execute("create loadbalancer", nil, "kubectl", "expose", "deployment", "splunk-s1-standalone",
+	execute("create loadbalancer", nil, "kubectl", "expose", "pod", "splunk-s1-standalone-0",
 		"--type=LoadBalancer", "--port=80", "--target-port=8000",
 		"--name=splunk-lb",
-		"--selector=app.kubernetes.io/component=standalone,app.kubernetes.io/instance=splunk-s1-standalone,app.kubernetes.io/managed-by=splunk-operator,app.kubernetes.io/name=standalone,app.kubernetes.io/part-of=splunk-s1-standalone")
+		"--namespace=splunk-operator")
 
+	// Define the kubectl command to get the service details in JSON format
+	cmd = exec.Command("kubectl", "get", "svc", "splunk-lb", "-o", "json")
+
+	// Run the command and capture the output
+	output, err = cmd.Output()
+	if err != nil {
+		fmt.Printf("Error executing command: %v\n", err)
+		return
+	}
+
+	// Parse the JSON output
+	var status LoadBalancerStatus
+	if err := json.Unmarshal(output, &status); err != nil {
+		fmt.Printf("Error parsing JSON: %v\n", err)
+		return
+	}
+
+	// Print the IP addresses
+	for _, ingress := range status.Ingress {
+		if ingress.IP != "" {
+			fmt.Printf("LoadBalancer IP: %s\n", ingress.IP)
+		} else if ingress.Hostname != "" {
+			fmt.Printf("LoadBalancer Hostname: %s\n", ingress.Hostname)
+		}
+	}
+
+	//@todo auto create splunk index
+	/*
+	   	yamlConten2 := `
+	   splunkPlatform:
+	     insecureSkipVerify: true
+	     logsEnabled: true
+	   logsCollection:
+	     extraFileLogs:
+	       filelog/tetragon-log:
+	         include: [/var/run/cilium/tetragon/tetragon.log]
+	         start_at: beginning
+	         include_file_path: true
+	         include_file_name: false
+	         resource:
+	           com.splunk.index: demo
+	           com.splunk.source: tetragon
+	           host.name: 'EXPR(env("K8S_NODE_NAME"))'
+	           com.splunk.sourcetype: tetragon
+	       filelog/cilium-log:
+	         include: [/var/run/cilium/hubble/events.log]
+	         start_at: beginning
+	         include_file_path: true
+	         include_file_name: false
+	         resource:
+	           com.splunk.index: demo
+	           com.splunk.source: cilium
+	           host.name: 'EXPR(env("K8S_NODE_NAME"))'
+	           com.splunk.sourcetype: cilium
+	   agent:
+	     extraVolumeMounts:
+	       - name: tetragon
+	         mountPath: /var/run/cilium/tetragon
+	       - name: cilium
+	         mountPath: /var/run/cilium/hubble
+	     extraVolumes:
+	       - name: tetragon
+	         hostPath:
+	           path: /var/run/cilium/tetragon
+	       - name: cilium
+	         hostPath:
+	           path: /var/run/cilium/hubble
+	   	`
+	*/
 }
 
 func execute(description string, input *string, command string, args ...string) error {
@@ -224,7 +303,7 @@ func execute(description string, input *string, command string, args ...string) 
 	output := ""
 	for scanner.Scan() {
 		line := scanner.Text()
-		area.Update("                      ", line)
+		area.Update("                           ", line)
 		output = output + line + "\n"
 	}
 
