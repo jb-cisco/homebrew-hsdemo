@@ -131,6 +131,10 @@ func main() {
 		fmt.Println(string(output))
 	}
 
+	//CNI
+	cniOptions := []string{"Cilium", "EKS Default"}
+	cniChoice, _ := pterm.DefaultInteractiveSelect.WithDefaultText("CNI").WithOptions(cniOptions).Show()
+
 	// Print two new lines as spacer.
 	if !createNewCluster {
 		fmt.Println("Cluster already exist. To delete the cluster exit and run: eksdemo delete cluster", clusterName)
@@ -153,10 +157,6 @@ func main() {
 			fmt.Println("Aborting the remaining steps because the cluster creation failed! :( ")
 		}
 	}
-
-	//CNI
-	cniOptions := []string{"Cilium", "EKS Default"}
-	cniChoice, _ := pterm.DefaultInteractiveSelect.WithDefaultText("CNI").WithOptions(cniOptions).Show()
 
 	if cniChoice == "Cilium" {
 		execute("installing cilium", nil, "eksdemo", "install", "cilium", "--cluster", clusterName)
