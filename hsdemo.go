@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -119,11 +118,14 @@ func main() {
 	}
 	fmt.Println(string(output))
 
-	cmd = exec.Command("eksdemo", "get", "cluster", "hsdemo-cluster")
+	//cluster name
+	clusterName, _ := pterm.DefaultInteractiveTextInput.WithDefaultText("Cluster Name").WithDefaultValue("hsdemo-cluster").Show()
+
+	cmd = exec.Command("eksdemo", "get", "cluster", clusterName)
 	output, err = cmd.Output()
 	createNewCluster := false
 	if err != nil {
-		fmt.Println("No existing hsdemo-cluster found in current active aws profile. If this is not expected cancel this program and run aws configure --profile PROFILENAME")
+		fmt.Printf("No existing %s found in current active aws profile. If this is not expected cancel this program and run aws configure --profile PROFILENAME \n", clusterName)
 		createNewCluster = true
 	} else {
 		fmt.Println(string(output))
@@ -131,28 +133,35 @@ func main() {
 
 	// Print two new lines as spacer.
 	if !createNewCluster {
-		fmt.Println("Cluster already exist. More demo features coming soon. To delete the cluster run: eksdemo delete cluster hsdemo-cluster")
-		fmt.Println(pterm.Red("WARNING:"), "Do you wish to re-run all setup commands on the existing hsdemo-cluster?")
+		fmt.Println("Cluster already exist. To delete the cluster exit and run: eksdemo delete cluster", clusterName)
+		fmt.Println(pterm.Red("WARNING:"), "Do you wish to re-run all setup commands on the existing cluster?")
 		prompt := pterm.DefaultInteractiveConfirm
 		result, _ := prompt.Show("Do you wish to continue?")
 		if !result {
 			return
 		}
-		execute("setting eksdemo and kubectl context", nil, "eksdemo", "use-context", "hsdemo-cluster")
+		execute("setting eksdemo and kubectl context", nil, "eksdemo", "use-context", clusterName)
 	} else {
-		fmt.Println(pterm.Red("WARNING:"), "Contininuing will create a new cluster and related resources in the above AWS account. Please ensure this is a non-production demo system. This process will take approximately 20 minutes.")
+		fmt.Println(pterm.Red("WARNING:"), "Continuing will create a new cluster and related resources in the above AWS account. Please ensure this is a non-production demo system. This process will take approximately 20 minutes.")
 		prompt := pterm.DefaultInteractiveConfirm
 		result, _ := prompt.Show("Do you wish to continue?")
 		if !result {
 			return
 		}
-		errored := execute("creating cluster", nil, "eksdemo", "create", "cluster", "hsdemo-cluster")
+		errored := execute("creating cluster", nil, "eksdemo", "create", "cluster", clusterName)
 		if errored != nil {
 			fmt.Println("Aborting the remaining steps because the cluster creation failed! :( ")
 		}
 	}
 
-	execute("installing cilium", nil, "eksdemo", "install", "cilium", "--cluster", "hsdemo-cluster")
+	//CNI
+	cniOptions := []string{"Cilium", "EKS Default"}
+	cniChoice, _ := pterm.DefaultInteractiveSelect.WithDefaultText("CNI").WithOptions(cniOptions).Show()
+
+	if cniChoice == "Cilium" {
+		execute("installing cilium", nil, "eksdemo", "install", "cilium", "--cluster", clusterName)
+	}
+
 	execute("deploying registry secrets", nil, "kubectl", "create", "secret", "docker-registry", "hypershield-tsa-registry",
 		"--namespace", "kube-system",
 		"--docker-server", tsa_registry,
@@ -160,11 +169,11 @@ func main() {
 		"--docker-password", tsa_registry_cred,
 		"--docker-email", tsa_registry_email)
 
-	execute("deploying TSA", nil, "helm", "install", "hypershield-tsa", "oci://"+tsa_registry+"/charts/hypershield-tsa", "--namespace", "kube-system", "--set", "apiTokenSecret="+CDO_API_TOKEN, "--version", "1.3.4",
+	execute("deploying TSA", nil, "helm", "install", "hypershield-tsa", "oci://"+tsa_registry+"/charts/hypershield-tsa", "--namespace", "kube-system", "--set", "apiTokenSecret="+CDO_API_TOKEN, "--version", "1.5.0",
 		"--set", "tetragon.imagePullPolicy=Always",
 		"--set", "tetragon.imagePullSecrets[0].name=hypershield-tsa-registry")
 
-	execute("installing storage driver", nil, "eksdemo", "install", "storage-ebs-csi", "-c", "hsdemo-cluster")
+	execute("installing storage driver", nil, "eksdemo", "install", "storage-ebs-csi", "-c", clusterName)
 	execute("annotating storage", nil, "kubectl", "annotate", "storageclass", "gp2", "storageclass.kubernetes.io/is-default-class=true")
 	execute("deploying splunk operator", nil, "kubectl", "apply", "--server-side", "--force-conflicts", "-f", "https://github.com/splunk/splunk-operator/releases/download/2.7.0/splunk-operator-namespace.yaml")
 
@@ -176,10 +185,10 @@ func main() {
     name: s1
     finalizers:
     - enterprise.splunk.com/delete-pvc`
-	execute("deploy splunk instance", &yamlContent, "kubectl", "apply", "--namespace", "splunk-operator", "-f", "-")
+	execute("deploy splunk instance", &yamlContent, "kubectl", "apply", "--namespace=splunk-operator", "-f", "-")
 
 	// Command to get the current AWS user
-	cmd = exec.Command("kubectl", "get", "secrets", "-n", "splunk-operator", "splunk-s1-standalone-secret-v1", "--output", "json")
+	cmd = exec.Command("kubectl", "get", "secrets", "--namespace=splunk-operator", "splunk-s1-standalone-secret-v1", "--output", "json")
 
 	// Run the command and capture the output
 	output, err = cmd.Output()
@@ -195,37 +204,45 @@ func main() {
 		fmt.Println(string(decodedOutput))
 	}
 
+	execute("Wait for splunk rollout", nil, "kubectl", "rollout", "status", "-w", "--namespace=splunk-operator",
+		"--timeout=180s", "deployment/splunk-operator-controller-manager")
+
+	execute("Wait for splunk pod", nil, "kubectl", "wait", "--for=condition=ready", "pod/splunk-s1-standalone-0", "--namespace=splunk-operator",
+		"--timeout=180s")
+
 	execute("create loadbalancer", nil, "kubectl", "expose", "pod", "splunk-s1-standalone-0",
 		"--type=LoadBalancer", "--port=80", "--target-port=8000",
 		"--name=splunk-lb",
 		"--namespace=splunk-operator")
 
-	// Define the kubectl command to get the service details in JSON format
-	cmd = exec.Command("kubectl", "get", "svc", "splunk-lb", "-o", "json")
+	/*
+		// Define the kubectl command to get the service details in JSON format
+		cmd = exec.Command("kubectl", "get", "svc", "splunk-lb", "-o", "json")
 
-	// Run the command and capture the output
-	output, err = cmd.Output()
-	if err != nil {
-		fmt.Printf("Error executing command: %v\n", err)
-		return
-	}
-
-	// Parse the JSON output
-	var status LoadBalancerStatus
-	if err := json.Unmarshal(output, &status); err != nil {
-		fmt.Printf("Error parsing JSON: %v\n", err)
-		return
-	}
-
-	// Print the IP addresses
-	for _, ingress := range status.Ingress {
-		if ingress.IP != "" {
-			fmt.Printf("LoadBalancer IP: %s\n", ingress.IP)
-		} else if ingress.Hostname != "" {
-			fmt.Printf("LoadBalancer Hostname: %s\n", ingress.Hostname)
+		// Run the command and capture the output
+		output, err = cmd.Output()
+		if err != nil {
+			fmt.Printf("Error executing command: %v\n", err)
+			return
 		}
-	}
 
+		// Parse the JSON output
+		var status LoadBalancerStatus
+		if err := json.Unmarshal(output, &status); err != nil {
+			fmt.Printf("Error parsing JSON: %v\n", err)
+			return
+		}
+
+		// Print the IP addresses
+		for _, ingress := range status.Ingress {
+			if ingress.IP != "" {
+				fmt.Printf("LoadBalancer IP: %s\n", ingress.IP)
+			} else if ingress.Hostname != "" {
+				fmt.Printf("LoadBalancer Hostname: %s\n", ingress.Hostname)
+			}
+		}
+
+	*/
 	//@todo auto create splunk index
 	/*
 	   	yamlConten2 := `
