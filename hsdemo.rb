@@ -1,6 +1,6 @@
 class Hsdemo < Formula
     desc "Sets up hs demo in eks cluster"
-    version "1.2"
+    version "1.2.1"
     url "https://github.com/jb-cisco/homebrew-hsdemo/releases/download/v1.2/hsdemo" 
     # List of dependencies
   depends_on "eksdemo"
