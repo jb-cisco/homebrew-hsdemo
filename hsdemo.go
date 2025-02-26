@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -22,12 +23,23 @@ type LoadBalancerStatus struct {
 }
 
 func main() {
+	/* Logo */
 	pterm.DefaultBigText.WithLetters(putils.LettersFromString("hsdemo")).Srender()
-	pterm.DefaultHeader.Println("HS Demo Tool - jamboyki@cisco.com - Non-production demo use only")
+	pterm.DefaultHeader.Println("HS Demo Tool 1.3 - jamboyki@cisco.com - Non-production demo use only")
 	pterm.DefaultSection.Println("Tools")
 
-	prereqs := true
+	/* Params */
+	ciliumFlag := flag.Bool("cilium", true, "use cilium else default eks cni will be used")
+	agentFlag := flag.Bool("tesseract", true, "use tesseract else tetragon will be used")
+	ccFlag := flag.Bool("createcluster", true, "will create eks cluster if it does not exist")
+	clusterNamePtr := flag.String("clustername", "hsdemo-cluster", "eks cluster name")
+	interactiveFlag := flag.Bool("interactive", true, "will prompt user for options otherwise will use defaults where possible or fail")
+	tsaRegPtr := flag.String("tsareg", "654654525765.dkr.ecr.us-east-2.amazonaws.com", "TSA container registry url. Can also be overridden by env var HYPERSHIELD_TSA_REGISTRY")
+	tsaReEmailPtr := flag.String("tsaregemail", "", "TSA registry email. Can also be set by env var HYPERSHIELD_TSA_REGISTRY_EMAIL.")
+	flag.Parse()
 
+	/* Prereqs */
+	//dependencies
 	requiredApps := []string{"aws", "kubectl", "eksdemo"}
 	for _, value := range requiredApps {
 		if isAppInstalled(value) {
@@ -35,76 +47,83 @@ func main() {
 		} else {
 			fmt.Println(pterm.Red("\u274C "), value)
 			fmt.Println("Try running brew reinstall hsdemo or find a way to install the avove required missing application")
+			os.Exit(1)
 		}
 	}
 
+	//env and tokens
 	pterm.DefaultSection.Println("Local Environment")
-	//CDO Token
-	CDO_API_TOKEN := ""
-	value, exists := os.LookupEnv("CDO_API_TOKEN")
-	if exists && value != "" {
-		CDO_API_TOKEN = value
-	} else {
-		result, _ := pterm.DefaultInteractiveTextInput.Show("Paste your SCC API TOKEN (or set env CDO_API_TOKEN)")
-		CDO_API_TOKEN = result
-	}
 
-	if CDO_API_TOKEN == "" {
-		fmt.Println(pterm.Red("\u274C "), "CDO API Token: Not Set")
-		println("Try going to https://us.manage.security.cisco.com/settings?selectedTab=user_management to create an API token")
-	} else {
-		fmt.Println(pterm.Green("\u2713 "), "CDO API Token: ", CDO_API_TOKEN)
-	}
-
-	//registry
-	tsa_registry := "654654525765.dkr.ecr.us-east-2.amazonaws.com"
-	value, exists = os.LookupEnv("HYPERSHIELD_TSA_REGISTRY")
-	if exists && value != "" {
-		tsa_registry = value
-	}
-
-	fmt.Println(pterm.Green("\u2713 "), "TSA Registry:", tsa_registry)
-
-	//registry credential
+	//If using TSA and not Tetragon
+	tsa_reg := ""
 	tsa_registry_cred := ""
-	value, exists = os.LookupEnv("HYPERSHIELD_TSA_REGISTRY_CREDENTIAL")
-	if exists && value != "" {
-		tsa_registry_cred = value
-	} else {
-		cmd := exec.Command("aws", "--region", "us-east-2", "ecr", "get-login-password")
-		output, err := cmd.Output()
-		if err != nil {
-			fmt.Println(pterm.Red("\u274C "), "TSA Registry Credential: Not Set")
-			fmt.Println("Unable to get tsa registry credential: ", output)
-			fmt.Println("Unable to get tsa registry credential: ", err)
-			fmt.Println("Make sure you are logged in using AWS CLI or make sure the environmental variable HYPERSHIELD_TSA_REGISTRY_CREDENTIAL is set.")
-			prereqs = false
-		}
-		tsa_registry_cred = string(output)
-	}
-	fmt.Println(pterm.Green("\u2713 "), "TSA Registry Credential:", tsa_registry_cred)
-
-	//email
 	tsa_registry_email := ""
-	value, exists = os.LookupEnv("HYPERSHIELD_TSA_REGISTRY_EMAIL")
-	if exists && value != "" {
-		tsa_registry_email = value
-	} else {
-		tsa_registry_email, _ = pterm.DefaultInteractiveTextInput.Show("Enter email address with tsa registry access: ")
-	}
-	fmt.Println(pterm.Green("\u2713 "), "TSA Registry Email:", tsa_registry_email)
+	SCC_API_TOKEN := ""
 
-	if !prereqs {
-		pterm.Println("Unable to proceed until the above issues are fixed.")
-		return
-	}
+	if *agentFlag {
+		//scc token
+		value, exists := os.LookupEnv("SCC_API_TOKEN")
+		if exists && value != "" {
+			SCC_API_TOKEN = value
+		} else if !*interactiveFlag {
+			fmt.Println(pterm.Red("\u274C "), "You must set environmental variable SCC_API_TOKEN or use interactive mode")
+			os.Exit(1)
+		} else {
+			println("Try going to https://us.manage.security.cisco.com/settings?selectedTab=user_management to create an API user and copy the token")
+			result, _ := pterm.DefaultInteractiveTextInput.WithMultiLine().Show("Paste your SCC API TOKEN (or set env SCC_API_TOKEN)")
+			SCC_API_TOKEN = result
+		}
+		fmt.Println(pterm.Green("\u2713 "), "SCC API Token: ", SCC_API_TOKEN)
 
-	pterm.DefaultSection.Println("TSA Access")
-	result := execute("Logging in TSA regsitry", nil, "helm", "registry", "login", "--username", "AWS", "--password", tsa_registry_cred, tsa_registry)
-	if result != nil {
-		pterm.Println("Unable to proceed until the above issue is fixed.")
-		return
-	}
+		//tsa registry
+		value, exists = os.LookupEnv("HYPERSHIELD_TSA_REGISTRY")
+		if exists && value != "" {
+			tsa_reg = value
+		} else {
+			tsa_reg = *tsaRegPtr
+		}
+		fmt.Println(pterm.Green("\u2713 "), "TSA Registry:", tsa_reg)
+
+		//registry credential
+		value, exists = os.LookupEnv("HYPERSHIELD_TSA_REGISTRY_CREDENTIAL")
+		if exists && value != "" {
+			tsa_registry_cred = value
+		} else {
+			cmd := exec.Command("aws", "--region", "us-east-2", "ecr", "get-login-password")
+			output, err := cmd.Output()
+			if err != nil {
+				fmt.Println(pterm.Red("\u274C "), "TSA Registry Credential: Not Set")
+				fmt.Println("Unable to get tsa registry credential: ", output)
+				fmt.Println("Unable to get tsa registry credential: ", err)
+				fmt.Println("Make sure you are logged in using AWS CLI or make sure the environmental variable HYPERSHIELD_TSA_REGISTRY_CREDENTIAL is set.")
+				os.Exit(1)
+			}
+			tsa_registry_cred = string(output)
+		}
+		fmt.Println(pterm.Green("\u2713 "), "TSA Registry Credential:", tsa_registry_cred)
+
+		//email
+		value, exists = os.LookupEnv("HYPERSHIELD_TSA_REGISTRY_EMAIL")
+		if *tsaReEmailPtr != "" {
+			tsa_registry_email = *tsaRegPtr
+		} else if exists && value != "" {
+			tsa_registry_email = value
+		} else if !*interactiveFlag {
+			fmt.Println(pterm.Red("\u274C "), "You must set environmental variable HYPERSHIELD_TSA_REGISTRY_EMAIL or use interactive mode")
+			os.Exit(1)
+		} else {
+			tsa_registry_email, _ = pterm.DefaultInteractiveTextInput.Show("Enter email address with tsa registry access: ")
+		}
+		fmt.Println(pterm.Green("\u2713 "), "TSA Registry Email:", tsa_registry_email)
+
+		pterm.DefaultSection.Println("TSA Access")
+		result := execute("Logging in TSA regsitry", nil, "helm", "registry", "login", "--username", "AWS", "--password", tsa_registry_cred, tsa_reg)
+		if result != nil {
+			fmt.Println(pterm.Red("TSA Registry Access Failure"))
+			os.Exit(1)
+		}
+
+	} //end tsa only
 
 	pterm.DefaultSection.Println("AWS Environment")
 	// Command to get the current AWS user
@@ -119,33 +138,35 @@ func main() {
 	fmt.Println(string(output))
 
 	//cluster name
-	clusterName, _ := pterm.DefaultInteractiveTextInput.WithDefaultText("Cluster Name").WithDefaultValue("hsdemo-cluster").Show()
+	clusterName := ""
+	if *clusterNamePtr != "" {
+		clusterName = *clusterNamePtr
+	} else if *interactiveFlag {
+		clusterName, _ = pterm.DefaultInteractiveTextInput.WithDefaultText("Cluster Name").WithDefaultValue("hsdemo-cluster").Show()
+	} else {
+		clusterName = "hsdemo-cluster"
+		fmt.Printf("Non-interactive mode using default clustername hsdemo-cluster")
+	}
 
 	cmd = exec.Command("eksdemo", "get", "cluster", clusterName)
 	output, err = cmd.Output()
+
+	/* Deploy */
+	//create cluster
 	createNewCluster := false
-	if err != nil {
-		fmt.Printf("No existing %s found in current active aws profile. If this is not expected cancel this program and run aws configure --profile PROFILENAME \n", clusterName)
+	if err != nil && *ccFlag {
+		fmt.Printf("No existing %s found in current active aws profile. Cluster will be created. If this is not expected cancel this program and run aws configure --profile PROFILENAME \n", clusterName)
 		createNewCluster = true
-	} else {
+	} else if err != nil && !*ccFlag {
 		fmt.Println(string(output))
+		fmt.Printf("No existing %s found in current active aws profile. Cluster will be created. Maybe run aws configure --profile PROFILENAME \n", clusterName)
+		fmt.Println(pterm.Red("No cluster to work with and you specified not to create a new cluster"))
+		os.Exit(1)
+	} else {
+		fmt.Printf("Using existing cluster %s found in current active aws profile.\n", clusterName)
 	}
 
-	//CNI
-	cniOptions := []string{"Cilium", "EKS Default"}
-	cniChoice, _ := pterm.DefaultInteractiveSelect.WithDefaultText("CNI").WithOptions(cniOptions).Show()
-
-	// Print two new lines as spacer.
-	if !createNewCluster {
-		fmt.Println("Cluster already exist. To delete the cluster exit and run: eksdemo delete cluster", clusterName)
-		fmt.Println(pterm.Red("WARNING:"), "Do you wish to re-run all setup commands on the existing cluster?")
-		prompt := pterm.DefaultInteractiveConfirm
-		result, _ := prompt.Show("Do you wish to continue?")
-		if !result {
-			return
-		}
-		execute("setting eksdemo and kubectl context", nil, "eksdemo", "use-context", clusterName)
-	} else {
+	if createNewCluster && *interactiveFlag {
 		fmt.Println(pterm.Red("WARNING:"), "Continuing will create a new cluster and related resources in the above AWS account. Please ensure this is a non-production demo system. This process will take approximately 20 minutes.")
 		prompt := pterm.DefaultInteractiveConfirm
 		result, _ := prompt.Show("Do you wish to continue?")
@@ -155,29 +176,41 @@ func main() {
 		errored := execute("creating cluster", nil, "eksdemo", "create", "cluster", clusterName)
 		if errored != nil {
 			fmt.Println("Aborting the remaining steps because the cluster creation failed! :( ")
+			os.Exit(1)
 		}
 	}
 
-	if cniChoice == "Cilium" {
+	//cilium
+	if *ciliumFlag {
 		execute("installing cilium", nil, "eksdemo", "install", "cilium", "--cluster", clusterName)
 	}
 
-	execute("deploying registry secrets", nil, "kubectl", "create", "secret", "docker-registry", "hypershield-tsa-registry",
-		"--namespace", "kube-system",
-		"--docker-server", tsa_registry,
-		"--docker-username", "AWS",
-		"--docker-password", tsa_registry_cred,
-		"--docker-email", tsa_registry_email)
+	//tsa or tetragon
+	if *agentFlag {
+		//tsa
+		execute("deploying registry secrets", nil, "kubectl", "create", "secret", "docker-registry", "hypershield-tsa-registry",
+			"--namespace", "kube-system",
+			"--docker-server", tsa_reg,
+			"--docker-username", "AWS",
+			"--docker-password", tsa_registry_cred,
+			"--docker-email", tsa_registry_email)
 
-	execute("deploying TSA", nil, "helm", "install", "hypershield-tsa", "oci://"+tsa_registry+"/charts/hypershield-tsa", "--namespace", "kube-system", "--set", "apiTokenSecret="+CDO_API_TOKEN, "--version", "1.5.0",
-		"--set", "tetragon.imagePullPolicy=Always",
-		"--set", "tetragon.imagePullSecrets[0].name=hypershield-tsa-registry")
+		execute("deploying TSA", nil, "helm", "install", "hypershield-tsa", "oci://"+tsa_reg+"/charts/hypershield-tsa", "--namespace", "kube-system", "--set", "apiTokenSecret="+SCC_API_TOKEN, "--version", "1.5.0",
+			"--set", "tetragon.imagePullPolicy=Always",
+			"--set", "tetragon.imagePullSecrets[0].name=hypershield-tsa-registry")
 
+	} else {
+		//tetragon
+		execute("deploying Tetragon", nil, "helm", "install", "tetragon", "cilium/tetragon", "--namespace", "kube-system")
+	}
+
+	//storage
 	execute("installing storage driver", nil, "eksdemo", "install", "storage-ebs-csi", "-c", clusterName)
 	execute("annotating storage", nil, "kubectl", "annotate", "storageclass", "gp2", "storageclass.kubernetes.io/is-default-class=true")
+
+	//splunk
 	execute("deploying splunk operator", nil, "kubectl", "apply", "--server-side", "--force-conflicts", "-f", "https://github.com/splunk/splunk-operator/releases/download/2.7.0/splunk-operator-namespace.yaml")
 
-	// Define the YAML content
 	yamlContent := `
   apiVersion: enterprise.splunk.com/v4
   kind: Standalone
@@ -187,15 +220,11 @@ func main() {
     - enterprise.splunk.com/delete-pvc`
 	execute("deploy splunk instance", &yamlContent, "kubectl", "apply", "--namespace=splunk-operator", "-f", "-")
 
-	// Command to get the current AWS user
 	cmd = exec.Command("kubectl", "get", "secrets", "--namespace=splunk-operator", "splunk-s1-standalone-secret-v1", "--output", "json")
-
-	// Run the command and capture the output
 	output, err = cmd.Output()
 	if err != nil {
 		fmt.Printf("Error executing command: %s\n", err)
 	}
-	// Decode the base64 output
 	decodedOutput, err := base64.StdEncoding.DecodeString(string(output))
 	if err != nil {
 		fmt.Printf("Error decoding base64: %s\n", err)
@@ -210,82 +239,11 @@ func main() {
 	execute("Wait for splunk pod", nil, "kubectl", "wait", "--for=condition=ready", "pod/splunk-s1-standalone-0", "--namespace=splunk-operator",
 		"--timeout=180s")
 
+	//loadbalancer
 	execute("create loadbalancer", nil, "kubectl", "expose", "pod", "splunk-s1-standalone-0",
 		"--type=LoadBalancer", "--port=80", "--target-port=8000",
 		"--name=splunk-lb",
 		"--namespace=splunk-operator")
-
-	/*
-		// Define the kubectl command to get the service details in JSON format
-		cmd = exec.Command("kubectl", "get", "svc", "splunk-lb", "-o", "json")
-
-		// Run the command and capture the output
-		output, err = cmd.Output()
-		if err != nil {
-			fmt.Printf("Error executing command: %v\n", err)
-			return
-		}
-
-		// Parse the JSON output
-		var status LoadBalancerStatus
-		if err := json.Unmarshal(output, &status); err != nil {
-			fmt.Printf("Error parsing JSON: %v\n", err)
-			return
-		}
-
-		// Print the IP addresses
-		for _, ingress := range status.Ingress {
-			if ingress.IP != "" {
-				fmt.Printf("LoadBalancer IP: %s\n", ingress.IP)
-			} else if ingress.Hostname != "" {
-				fmt.Printf("LoadBalancer Hostname: %s\n", ingress.Hostname)
-			}
-		}
-
-	*/
-	//@todo auto create splunk index
-	/*
-	   	yamlConten2 := `
-	   splunkPlatform:
-	     insecureSkipVerify: true
-	     logsEnabled: true
-	   logsCollection:
-	     extraFileLogs:
-	       filelog/tetragon-log:
-	         include: [/var/run/cilium/tetragon/tetragon.log]
-	         start_at: beginning
-	         include_file_path: true
-	         include_file_name: false
-	         resource:
-	           com.splunk.index: demo
-	           com.splunk.source: tetragon
-	           host.name: 'EXPR(env("K8S_NODE_NAME"))'
-	           com.splunk.sourcetype: tetragon
-	       filelog/cilium-log:
-	         include: [/var/run/cilium/hubble/events.log]
-	         start_at: beginning
-	         include_file_path: true
-	         include_file_name: false
-	         resource:
-	           com.splunk.index: demo
-	           com.splunk.source: cilium
-	           host.name: 'EXPR(env("K8S_NODE_NAME"))'
-	           com.splunk.sourcetype: cilium
-	   agent:
-	     extraVolumeMounts:
-	       - name: tetragon
-	         mountPath: /var/run/cilium/tetragon
-	       - name: cilium
-	         mountPath: /var/run/cilium/hubble
-	     extraVolumes:
-	       - name: tetragon
-	         hostPath:
-	           path: /var/run/cilium/tetragon
-	       - name: cilium
-	         hostPath:
-	           path: /var/run/cilium/hubble
-	   	`
-	*/
 }
 
 func execute(description string, input *string, command string, args ...string) error {

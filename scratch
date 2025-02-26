@@ -1,0 +1,72 @@
+
+	/*
+		// Define the kubectl command to get the service details in JSON format
+		cmd = exec.Command("kubectl", "get", "svc", "splunk-lb", "-o", "json")
+
+		// Run the command and capture the output
+		output, err = cmd.Output()
+		if err != nil {
+			fmt.Printf("Error executing command: %v\n", err)
+			return
+		}
+
+		// Parse the JSON output
+		var status LoadBalancerStatus
+		if err := json.Unmarshal(output, &status); err != nil {
+			fmt.Printf("Error parsing JSON: %v\n", err)
+			return
+		}
+
+		// Print the IP addresses
+		for _, ingress := range status.Ingress {
+			if ingress.IP != "" {
+				fmt.Printf("LoadBalancer IP: %s\n", ingress.IP)
+			} else if ingress.Hostname != "" {
+				fmt.Printf("LoadBalancer Hostname: %s\n", ingress.Hostname)
+			}
+		}
+
+	*/
+	//@todo auto create splunk index
+	/*
+	   	yamlConten2 := `
+	   splunkPlatform:
+	     insecureSkipVerify: true
+	     logsEnabled: true
+	   logsCollection:
+	     extraFileLogs:
+	       filelog/tetragon-log:
+	         include: [/var/run/cilium/tetragon/tetragon.log]
+	         start_at: beginning
+	         include_file_path: true
+	         include_file_name: false
+	         resource:
+	           com.splunk.index: demo
+	           com.splunk.source: tetragon
+	           host.name: 'EXPR(env("K8S_NODE_NAME"))'
+	           com.splunk.sourcetype: tetragon
+	       filelog/cilium-log:
+	         include: [/var/run/cilium/hubble/events.log]
+	         start_at: beginning
+	         include_file_path: true
+	         include_file_name: false
+	         resource:
+	           com.splunk.index: demo
+	           com.splunk.source: cilium
+	           host.name: 'EXPR(env("K8S_NODE_NAME"))'
+	           com.splunk.sourcetype: cilium
+	   agent:
+	     extraVolumeMounts:
+	       - name: tetragon
+	         mountPath: /var/run/cilium/tetragon
+	       - name: cilium
+	         mountPath: /var/run/cilium/hubble
+	     extraVolumes:
+	       - name: tetragon
+	         hostPath:
+	           path: /var/run/cilium/tetragon
+	       - name: cilium
+	         hostPath:
+	           path: /var/run/cilium/hubble
+	   	`
+	*/
