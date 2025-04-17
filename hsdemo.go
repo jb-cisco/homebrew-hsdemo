@@ -195,7 +195,7 @@ func main() {
 			"--docker-password", tsa_registry_cred,
 			"--docker-email", tsa_registry_email)
 
-		execute("deploying TSA", nil, "helm", "install", "hypershield-tsa", "oci://"+tsa_reg+"/charts/hypershield-tsa", "--namespace", "kube-system", "--set", "apiTokenSecret="+SCC_API_TOKEN, "--version", "1.5.0",
+		execute("deploying TSA", nil, "helm", "install", "hypershield-tsa", "oci://"+tsa_reg+"/charts/hypershield-tsa", "--namespace", "kube-system", "--set", "apiTokenSecret="+SCC_API_TOKEN, "--version", "1.6.0",
 			"--set", "tetragon.imagePullPolicy=Always",
 			"--set", "tetragon.imagePullSecrets[0].name=hypershield-tsa-registry")
 
