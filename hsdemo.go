@@ -25,7 +25,7 @@ type LoadBalancerStatus struct {
 func main() {
 	/* Logo */
 	pterm.DefaultBigText.WithLetters(putils.LettersFromString("hsdemo")).Srender()
-	pterm.DefaultHeader.Println("HS Demo Tool 1.3 - jamboyki@cisco.com - Non-production demo use only")
+	pterm.DefaultHeader.Println("HS Demo Tool 1.6 - jamboyki@cisco.com - Non-production demo use only")
 	pterm.DefaultSection.Println("Tools")
 
 	/* Params */
@@ -173,7 +173,7 @@ func main() {
 		if !result {
 			return
 		}
-		errored := execute("creating cluster", nil, "eksdemo", "create", "cluster", clusterName)
+		errored := execute("creating cluster", nil, "eksdemo", "create", "cluster", clusterName, "--os", "Ubuntu2004", "--version", "1.29")
 		if errored != nil {
 			fmt.Println("Aborting the remaining steps because the cluster creation failed! :( ")
 			os.Exit(1)
