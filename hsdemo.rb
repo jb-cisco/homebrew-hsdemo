@@ -1,7 +1,7 @@
 class Hsdemo < Formula
   desc "Sets up hs demo in eks cluster (DEPRECATED - use jb-cisco/hsd/hsd instead)"
   homepage "https://github.com/jb-cisco/homebrew-hsdemo"
-  version "1.6"
+  version "1.9"
   url "https://github.com/jb-cisco/homebrew-hsdemo/releases/download/v1.6/hsdemo"
 
   # List of dependencies
